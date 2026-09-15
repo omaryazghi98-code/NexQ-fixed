@@ -18,6 +18,7 @@ use crate::stt::groq_whisper::GroqConfig;
 use crate::stt::local_engines::ModelManager;
 use crate::stt::provider::DualPassConfig;
 use crate::stt::STTRouter;
+use crate::lan_remote::LanRemoteManager;
 use std::sync::RwLock;
 
 /// Recording info captured when stop_capture runs, consumed by end_meeting
@@ -67,6 +68,7 @@ pub struct AppState {
     pub rag: Option<Arc<Mutex<RagManager>>>,
     pub translation: Option<Arc<Mutex<TranslationRouter>>>,
     pub opus_mt_manager: Option<Arc<Mutex<OpusMtManager>>>,
+    pub lan_remote: Arc<Mutex<LanRemoteManager>>,
     pub whisper_config: Arc<RwLock<DualPassConfig>>,
     /// Shared Groq Whisper config — read by running providers on each API call,
     /// written by IPC commands. Allows live config updates mid-meeting.
@@ -119,6 +121,7 @@ impl AppState {
             rag: None,
             translation: None,
             opus_mt_manager: None,
+            lan_remote: Arc::new(Mutex::new(LanRemoteManager::default())),
             whisper_config: Arc::new(RwLock::new(DualPassConfig::default())),
             shared_groq_config: Arc::new(RwLock::new(GroqConfig::default())),
             pause_threshold_ms: Arc::new(AtomicU64::new(3000)),
