@@ -1,24 +1,18 @@
-use std::sync::Arc;
 use tauri::State;
 
 use crate::lan_remote::{self, LanRemoteInfo};
 use crate::state::AppState;
 
 #[tauri::command]
-pub async fn start_lan_remote(
+pub fn start_lan_remote(
     state: State<'_, AppState>,
     port: Option<u16>,
 ) -> Result<LanRemoteInfo, String> {
-    // Do not hold the std mutex across the async bind call. The server manager owns
-    // the running task after startup; command calls remain short and serialized.
-    let manager = Arc::clone(&state.lan_remote);
-    let mut guard = manager
+    let mut guard = state
+        .lan_remote
         .lock()
         .map_err(|_| "LAN remote lock poisoned".to_string())?;
-
-    // `start()` only awaits the TCP bind before handing the task to Tokio. This
-    // lock is therefore held for a brief startup window and never while serving.
-    guard.start(port).await
+    guard.start(port)
 }
 
 #[tauri::command]
