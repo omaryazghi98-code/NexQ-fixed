@@ -11,6 +11,7 @@ import { useTranslationStore } from "../stores/translationStore";
 import { useMeetingStore } from "../stores/meetingStore";
 import { translateSegments, getMeetingTranslations } from "../lib/ipc";
 import type { TranscriptUpdateEvent } from "../lib/types";
+import { useLanRemote } from "./useLanRemote";
 
 export function useTranslation() {
   const addTranslation = useTranslationStore((s) => s.addTranslation);
@@ -23,6 +24,9 @@ export function useTranslation() {
 
   const activeMeeting = useMeetingStore((s) => s.activeMeeting);
   const meetingId = activeMeeting?.id ?? null;
+
+  // Start the LAN second-screen transport once from the launcher webview.
+  useLanRemote();
 
   // Keep stable refs to avoid stale closures in async event handlers
   const addRef = useRef(addTranslation);
