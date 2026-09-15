@@ -1,6 +1,6 @@
 @echo off
 setlocal
-set "SCRIPT=%~dp0NexQ-Suite-CommandCenter.ps1"
+set "SCRIPT=%~dp0NexQ-Suite-CommandCenter-Fixed.ps1"
 if not exist "%SCRIPT%" (
   echo Command Center script not found: %SCRIPT%
   pause
