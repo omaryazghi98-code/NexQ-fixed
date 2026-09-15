@@ -1,0 +1,36 @@
+{
+  "controller": {
+    "name": "Acer",
+    "host": "",
+    "port": 17330
+  },
+  "nodes": [
+    {
+      "id": "hp",
+      "name": "HP — Interview",
+      "host": "",
+      "port": 17330,
+      "role": "Interview host",
+      "launch": ["discord", "googlemeet"],
+      "services": ["network"]
+    },
+    {
+      "id": "lenovo",
+      "name": "Lenovo — AI Core",
+      "host": "",
+      "port": 17330,
+      "role": "NexQ + 3V0L + AI",
+      "launch": ["nexq", "ev0l"],
+      "services": ["nexq", "ev0l", "ollama", "azure", "requesty", "cerebras", "deepgram"]
+    },
+    {
+      "id": "acer",
+      "name": "Acer — Teleprompter",
+      "host": "",
+      "port": 17330,
+      "role": "Teleprompter + Barrier",
+      "launch": ["display", "controller", "notion"],
+      "services": ["teleprompter", "barrier"]
+    }
+  ]
+}
