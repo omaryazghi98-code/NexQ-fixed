@@ -2,7 +2,6 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
-import "./lib/customLlmEndpointHistoryUi";
 
 // Check if this window was opened as a detached DevLog view
 const params = new URLSearchParams(window.location.search);
