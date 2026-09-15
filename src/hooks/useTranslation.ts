@@ -9,7 +9,7 @@ import {
 } from "../lib/events";
 import { useTranslationStore } from "../stores/translationStore";
 import { useMeetingStore } from "../stores/meetingStore";
-import { translateSegments, getMeetingTranslations } from "../lib/ipc";
+import { translateSegments, getMeetingTranslations, setStealthMode } from "../lib/ipc";
 import type { TranscriptUpdateEvent } from "../lib/types";
 import { useLanRemote } from "./useLanRemote";
 
@@ -48,6 +48,39 @@ export function useTranslation() {
     setTranslatingRef.current = setTranslating;
     meetingIdRef.current = meetingId;
   }, [addTranslation, addTranslations, setBatchProgress, autoTranslateActive, targetLang, sourceLang, setTranslating, meetingId]);
+
+  // Keep the overlay excluded from supported Windows capture APIs.
+  // The setting is automatically re-applied because some capture/window
+  // transitions can reset display affinity on Windows/Tauri.
+  useEffect(() => {
+    let mounted = true;
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const enableOverlayCaptureExclusion = async () => {
+      try {
+        const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+        if (!mounted || getCurrentWebviewWindow().label !== "overlay") return;
+
+        await setStealthMode(true);
+        console.info("[stealth] Overlay capture exclusion enabled");
+
+        timer = setInterval(() => {
+          setStealthMode(true).catch((error: unknown) => {
+            console.warn("[stealth] Failed to reapply capture exclusion:", error);
+          });
+        }, 2000);
+      } catch (error) {
+        console.warn("[stealth] Failed to initialize overlay capture exclusion:", error);
+      }
+    };
+
+    enableOverlayCaptureExclusion();
+
+    return () => {
+      mounted = false;
+      if (timer) clearInterval(timer);
+    };
+  }, []);
 
   // Subscribe to translation result/error/progress events
   useEffect(() => {
