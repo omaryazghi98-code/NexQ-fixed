@@ -10,12 +10,12 @@
 //! inside the existing pipeline.
 
 use axum::{
-    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, Query, State},
+    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State},
     response::Html,
     routing::get,
     Router,
 };
-use serde::Deserialize;
+use futures::{SinkExt, StreamExt};
 use std::net::{IpAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, oneshot};
@@ -66,15 +66,19 @@ impl LanRemoteManager {
         }
     }
 
-    pub async fn start(&mut self, port: Option<u16>) -> Result<LanRemoteInfo, String> {
+    pub fn start(&mut self, port: Option<u16>) -> Result<LanRemoteInfo, String> {
         if self.is_running() {
             return Ok(self.info());
         }
 
         let port = port.unwrap_or(DEFAULT_PORT);
-        let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
-            .await
+        let std_listener = std::net::TcpListener::bind(("0.0.0.0", port))
             .map_err(|e| format!("Failed to bind LAN remote on port {}: {}", port, e))?;
+        std_listener
+            .set_nonblocking(true)
+            .map_err(|e| format!("Failed to configure LAN remote listener: {}", e))?;
+        let listener = tokio::net::TcpListener::from_std(std_listener)
+            .map_err(|e| format!("Failed to initialize LAN remote listener: {}", e))?;
 
         let (tx, _rx) = broadcast::channel(CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -129,16 +133,9 @@ impl LanRemoteManager {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct WebSocketQuery {
-    #[serde(default)]
-    v: Option<u8>,
-}
-
 async fn websocket_handler(
     ws: WebSocketUpgrade,
     State(state): State<ServerState>,
-    Query(_query): Query<WebSocketQuery>,
 ) -> impl axum::response::IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state.tx.subscribe()))
 }
@@ -159,7 +156,7 @@ async fn handle_socket(mut socket: WebSocket, mut rx: broadcast::Receiver<String
 
     loop {
         tokio::select! {
-            inbound = socket.recv() => {
+            inbound = socket.next() => {
                 match inbound {
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(_)) => {},
@@ -241,11 +238,12 @@ function render(seg){
   if(seg.translated_text !== undefined) el.querySelector('.tr').textContent=seg.translated_text || '';
 }
 function apply(msg){
-  if(msg.type==='transcript'){ render(msg.segment); return; }
-  if(msg.type==='translation' && msg.segment_id){
-    const el=segments.get(msg.segment_id);
-    if(el) el.querySelector('.tr').textContent=msg.translated_text || '';
-    else render({id:msg.segment_id,text:msg.original_text||'',timestamp_ms:Date.now(),is_final:true,speaker_id:'Speaker',translated_text:msg.translated_text||''});
+  if(msg.type==='transcript'){ render(msg.payload); return; }
+  if(msg.type==='translation'){
+    const p=msg.payload || {};
+    let el=segments.get(p.segment_id);
+    if(!el){ render({id:p.segment_id,text:p.original_text||'',timestamp_ms:Date.now(),is_final:true,speaker_id:'Speaker',translated_text:p.translated_text||''}); }
+    else el.querySelector('.tr').textContent=p.translated_text || '';
   }
 }
 function connect(){
