@@ -14,6 +14,7 @@ import { useSpeakerStore } from "../stores/speakerStore";
 import { useAudioLevel } from "../hooks/useAudioLevel";
 import { hasApiKey, listLocalSTTEngines, setLLMProvider, setActiveModel, getApiKey } from "../lib/ipc";
 import type { STTProviderType, LLMProviderType, LocalSTTEngineInfo } from "../lib/types";
+import { getCustomLlmConfig } from "../lib/customLlmConfig";
 import { showToast } from "../stores/toastStore";
 
 // ── Human-friendly provider labels ──
@@ -231,9 +232,15 @@ export function ServiceStatusBar({ compact = false }: { compact?: boolean }) {
             onApply={async (provider, model) => {
               try {
                 const key = await getApiKey(provider).catch(() => null);
+                const custom = provider === "custom" ? await getCustomLlmConfig() : null;
                 const config = JSON.stringify({
                   provider_type: provider,
                   ...(key && { api_key: key }),
+                  ...(custom?.baseUrl && { base_url: custom.baseUrl }),
+                  ...(custom && custom.authType !== "none" && {
+                    auth_type: custom.authType,
+                    ...(key && { auth_value: key }),
+                  }),
                 });
                 await setLLMProvider(config);
                 setConfigProvider(provider as LLMProviderType);
@@ -917,9 +924,15 @@ function LLMPickerDropdown({
       try {
         const { listModels } = await import("../lib/ipc");
         const key = await getApiKey(pendingProvider).catch(() => null);
+        const custom = pendingProvider === "custom" ? await getCustomLlmConfig() : null;
         const config = JSON.stringify({
           provider_type: pendingProvider,
           ...(key && { api_key: key }),
+          ...(custom?.baseUrl && { base_url: custom.baseUrl }),
+          ...(custom && custom.authType !== "none" && {
+            auth_type: custom.authType,
+            ...(key && { auth_value: key }),
+          }),
         });
         const modelList = await listModels(config);
         if (cancelled) return;
@@ -951,9 +964,10 @@ function LLMPickerDropdown({
     return () => document.removeEventListener("keydown", handler);
   }, [onClose]);
 
-  // Only show verified/ready providers
+  // Only show verified/ready providers; Custom is available once configured or active.
+  const customConfigured = useConfigStore.getState().llmProvider === "custom";
   const available = LLM_PROVIDER_OPTIONS.filter((o) => {
-    if (o.value === "custom") return false;
+    if (o.value === "custom") return customConfigured;
     if (o.requiresKey) return verifiedProviders.includes(o.value);
     return verifiedProviders.includes(o.value); // Local also needs verification
   });

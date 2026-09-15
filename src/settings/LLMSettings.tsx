@@ -13,6 +13,7 @@ import {
   listOpenRouterModels,
 } from "../lib/ipc";
 import type { LLMProviderType, ModelInfo, OpenRouterModel } from "../lib/types";
+import { getCustomLlmConfig, saveCustomLlmConfig } from "../lib/customLlmConfig";
 import { OpenRouterModelCatalog } from "./openrouter/OpenRouterModelCatalog";
 import {
   CheckCircle,
@@ -155,6 +156,25 @@ export function LLMSettings() {
 
   // Load API key when provider changes
   useEffect(() => {
+    if (selectedProvider !== "custom") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const saved = await getCustomLlmConfig();
+        const savedKey = await getApiKey("custom").catch(() => null);
+        if (!cancelled) {
+          setCustomBaseUrl(saved.baseUrl);
+          setCustomAuthType(saved.authType);
+          setCustomAuthValue(savedKey || "");
+        }
+      } catch (e) {
+        console.warn("[LLMSettings] Failed to restore Custom config:", e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedProvider]);
+
+  useEffect(() => {
     const info = PROVIDER_DISPLAY[selectedProvider];
     if (info?.requiresKey) {
       getApiKey(selectedProvider)
@@ -184,6 +204,18 @@ export function LLMSettings() {
     return JSON.stringify(config);
   }, [selectedProvider, apiKey, customBaseUrl, customAuthType, customAuthValue]);
 
+  const persistCustomConfig = useCallback(async (baseUrl = customBaseUrl, authType = customAuthType, authValue = customAuthValue) => {
+    if (selectedProvider !== "custom") return;
+    try {
+      await saveCustomLlmConfig({ baseUrl, authType });
+      if (authType !== "none" && authValue) {
+        await storeApiKey("custom", authValue);
+      }
+    } catch (e) {
+      console.warn("[LLMSettings] Failed to persist Custom config:", e);
+    }
+  }, [selectedProvider, customBaseUrl, customAuthType, customAuthValue]);
+
   const handleProviderChange = (provider: LLMProviderType) => {
     setSelectedProvider(provider);
     setSelectedModel("");
@@ -192,6 +224,13 @@ export function LLMSettings() {
     setConnectionStatus("idle");
     setConnectionMessage("");
     setModelsError("");
+    if (provider === "custom") {
+      getCustomLlmConfig().then((saved) => {
+        setCustomBaseUrl(saved.baseUrl);
+        setCustomAuthType(saved.authType);
+        return getApiKey("custom");
+      }).then((savedKey) => setCustomAuthValue(savedKey || "")).catch(() => {});
+    }
   };
 
   const handleSaveApiKey = async () => {
@@ -209,6 +248,7 @@ export function LLMSettings() {
     setConnectionStatus("testing");
     setConnectionMessage("");
     try {
+      if (selectedProvider === "custom") await persistCustomConfig();
       if (apiKey) await storeApiKey(selectedProvider, apiKey).catch(() => {});
       const configJson = buildProviderConfig();
       const success = await testLLMConnection(configJson);
@@ -398,6 +438,7 @@ export function LLMSettings() {
               type="text"
               value={customBaseUrl}
               onChange={(e) => setCustomBaseUrl(e.target.value)}
+              onBlur={() => persistCustomConfig()}
               placeholder="http://localhost:8080/v1"
               maxLength={512}
               className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
@@ -408,7 +449,11 @@ export function LLMSettings() {
               <label className="mb-1.5 block text-xs font-medium text-foreground">Auth Type</label>
               <select
                 value={customAuthType}
-                onChange={(e) => setCustomAuthType(e.target.value as "none" | "bearer" | "api_key")}
+                onChange={(e) => {
+                  const value = e.target.value as "none" | "bearer" | "api_key";
+                  setCustomAuthType(value);
+                  persistCustomConfig(customBaseUrl, value, customAuthValue);
+                }}
                 className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"
               >
                 <option value="none">None</option>
@@ -425,6 +470,7 @@ export function LLMSettings() {
                   type="password"
                   value={customAuthValue}
                   onChange={(e) => setCustomAuthValue(e.target.value)}
+                  onBlur={() => persistCustomConfig()}
                   placeholder={customAuthType === "bearer" ? "Bearer token..." : "API key..."}
                   maxLength={256}
                   className="w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20"

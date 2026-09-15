@@ -648,6 +648,8 @@ export const useConfigStore = create<ConfigState>((set) => ({
       const sttLanguage = await store.get<string>("sttLanguage");
       const llmProvider = await store.get<LLMProviderType>("llmProvider");
       const llmModel = await store.get<string>("llmModel");
+      const customLlmBaseUrl = await store.get<string>("customLlmBaseUrl");
+      const customLlmAuthType = await store.get<string>("customLlmAuthType");
       const micDeviceId = await store.get<string | null>("micDeviceId");
       const systemDeviceId = await store.get<string | null>("systemDeviceId");
       const recordingEnabled = await store.get<boolean>("recordingEnabled");
@@ -950,6 +952,11 @@ export const useConfigStore = create<ConfigState>((set) => ({
             const config = JSON.stringify({
               provider_type: loadedLLMProvider,
               ...(apiKey && { api_key: apiKey }),
+              ...(loadedLLMProvider === "custom" && customLlmBaseUrl && { base_url: customLlmBaseUrl }),
+              ...(loadedLLMProvider === "custom" && customLlmAuthType && customLlmAuthType !== "none" && {
+                auth_type: customLlmAuthType,
+                ...(apiKey && { auth_value: apiKey }),
+              }),
             });
             await ipcSetLLM(config);
             if (loadedLLMModel) {
