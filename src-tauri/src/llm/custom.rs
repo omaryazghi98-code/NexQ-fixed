@@ -33,7 +33,10 @@ pub struct CustomClient {
 }
 
 impl CustomClient {
-    pub fn new(config: CustomConfig) -> Self {
+    pub fn new(mut config: CustomConfig) -> Self {
+        // Accept either https://host/v1 or https://host/v1/ in the UI,
+        // but always build normalized endpoint paths internally.
+        config.base_url = config.base_url.trim_end_matches('/').to_string();
         Self {
             config,
             client: reqwest::Client::new(),
@@ -250,7 +253,7 @@ impl LLMProvider for CustomClient {
     ) -> Result<CompletionStats, LLMError> {
         let start = Instant::now();
 
-        // Try OpenAI-compatible format first
+        // OpenAI-compatible chat completions endpoint.
         let url = format!("{}/chat/completions", self.config.base_url);
 
         let msgs: Vec<serde_json::Value> = messages
@@ -276,44 +279,33 @@ impl LLMProvider for CustomClient {
             body["max_tokens"] = json!(max_tok);
         }
 
-        // NOTE: llm_stream_start is emitted by IntelligenceEngine::generate_assist()
-        // with the correct mode. Do NOT emit it here — it would overwrite the mode.
-
-        let request = self
+        // Requesty is OpenAI-compatible. These headers are optional but useful
+        // for attribution and analytics when routing through Requesty.
+        let mut request = self
             .apply_auth(self.client.post(&url))
-            .header("Content-Type", "application/json")
-            .json(&body);
+            .header("Content-Type", "application/json");
+        if self.config.base_url.contains("router.requesty.ai") {
+            request = request
+                .header("HTTP-Referer", "https://github.com/omaryazghi98-code/NexQ-fixed")
+                .header("X-Title", "NexQ");
+        }
+        let request = request.json(&body);
 
-        let response = match request.send().await {
-            Ok(resp) if resp.status().is_success() => resp,
-            _ => {
-                // Fall back to Ollama-compatible endpoint
-                let url = format!("{}/api/chat", self.config.base_url);
-                let body = json!({
-                    "model": model,
-                    "messages": msgs,
-                    "stream": true
-                });
-
-                let request = self
-                    .apply_auth(self.client.post(&url))
-                    .header("Content-Type", "application/json")
-                    .json(&body);
-
-                request.send().await.map_err(|e| {
-                    let _ = app_handle.emit("llm_stream_error", e.to_string());
-                    LLMError::ConnectionFailed(format!(
-                        "Failed to connect to custom endpoint: {}",
-                        e
-                    ))
-                })?
-            }
-        };
+        let response = request.send().await.map_err(|e| {
+            let _ = app_handle.emit("llm_stream_error", e.to_string());
+            LLMError::ConnectionFailed(format!(
+                "Failed to connect to custom endpoint {}: {}",
+                url, e
+            ))
+        })?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            let err_msg = format!("Custom endpoint request failed ({}): {}", status, body);
+            let err_msg = format!(
+                "Custom endpoint request failed ({}): {}",
+                status, body
+            );
             let _ = app_handle.emit("llm_stream_error", &err_msg);
             return Err(LLMError::ProviderError(err_msg));
         }
