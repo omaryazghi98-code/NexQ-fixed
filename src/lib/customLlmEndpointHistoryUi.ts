@@ -1,17 +1,21 @@
 import {
   getCustomLlmEndpointKey,
   getCustomLlmEndpointProfiles,
+  saveCustomLlmConfig,
   selectCustomLlmEndpoint,
 } from "./customLlmConfig";
+import { storeApiKey } from "./ipc";
 
 const BASE_URL_PLACEHOLDER = "http://localhost:8080/v1";
-const UI_MARKER = "data-nexq-custom-endpoint-picker";
+const ADD_MARKER = "data-nexq-add-custom-provider";
+const CARD_MARKER = "data-nexq-custom-provider";
+
+function normalize(value: string): string {
+  return value.trim().replace(/\/+$/, "");
+}
 
 function setControlledInputValue(input: HTMLInputElement, value: string): void {
-  const setter = Object.getOwnPropertyDescriptor(
-    HTMLInputElement.prototype,
-    "value"
-  )?.set;
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
   setter?.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new Event("change", { bubbles: true }));
@@ -23,126 +27,119 @@ function setControlledSelectValue(select: HTMLSelectElement, value: string): voi
 }
 
 function findCustomCard(input: HTMLInputElement): HTMLElement | null {
-  // The Custom Provider card contains the base URL input, auth select and
-  // optional token input. Walk upward until we find at least one select.
   let node: HTMLElement | null = input.parentElement;
-  for (let i = 0; node && i < 5; i += 1) {
+  for (let i = 0; node && i < 8; i += 1) {
     if (node.querySelector("select")) return node;
     node = node.parentElement;
   }
   return null;
 }
 
-async function applyProfile(baseUrl: string): Promise<void> {
-  const input = document.querySelector<HTMLInputElement>(
-    `input[placeholder="${BASE_URL_PLACEHOLDER}"]`
-  );
-  if (!input) return;
+function findProviderGrid(input: HTMLInputElement): HTMLElement | null {
+  let node: HTMLElement | null = input.parentElement;
+  for (let i = 0; node && i < 12; i += 1) {
+    if (node.classList.contains("grid-cols-4") && node.querySelectorAll("button").length >= 8) return node;
+    node = node.parentElement;
+  }
+  return null;
+}
 
-  const profile = await selectCustomLlmEndpoint(baseUrl);
-  setControlledInputValue(input, profile.baseUrl);
-
+async function currentValues(): Promise<{ baseUrl: string; authType: "none" | "bearer" | "api_key"; authValue: string }> {
+  const input = document.querySelector<HTMLInputElement>(`input[placeholder="${BASE_URL_PLACEHOLDER}"]`);
+  if (!input) return { baseUrl: "", authType: "none", authValue: "" };
   const card = findCustomCard(input);
-  if (!card) return;
+  const selects = card ? Array.from(card.querySelectorAll("select")) : [];
+  const authSelect = selects.find((select) => Array.from(select.options).some((o) => ["none", "bearer", "api_key"].includes(o.value)));
+  const authType = authSelect?.value === "bearer" || authSelect?.value === "api_key" ? authSelect.value : "none";
+  const token = card ? Array.from(card.querySelectorAll<HTMLInputElement>('input[type="password"]')).find((field) => field !== input) : undefined;
+  return { baseUrl: normalize(input.value), authType, authValue: token?.value || "" };
+}
 
-  const authSelect = Array.from(card.querySelectorAll("select")).find((select) =>
-    Array.from(select.options).some((option) =>
-      ["none", "bearer", "api_key"].includes(option.value)
-    )
-  );
-  if (authSelect) setControlledSelectValue(authSelect, profile.authType);
+async function mountAddButton(): Promise<void> {
+  const input = document.querySelector<HTMLInputElement>(`input[placeholder="${BASE_URL_PLACEHOLDER}"]`);
+  if (!input) return;
+  const card = findCustomCard(input);
+  if (!card || card.querySelector(`[${ADD_MARKER}]`)) return;
 
-  if (profile.authType !== "none") {
-    const tokenInput = Array.from(card.querySelectorAll<HTMLInputElement>('input[type="password"]'))
-      .find((field) => field !== input);
-    if (tokenInput) {
-      const key = await getCustomLlmEndpointKey(profile.baseUrl);
-      if (key) setControlledInputValue(tokenInput, key);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.setAttribute(ADD_MARKER, "true");
+  button.className = "mt-3 inline-flex items-center rounded-lg border border-primary/30 bg-primary/5 px-3.5 py-2 text-xs font-medium text-primary hover:bg-primary/10 cursor-pointer";
+  button.textContent = "Add as provider";
+
+  button.addEventListener("click", async () => {
+    const values = await currentValues();
+    if (!values.baseUrl) return;
+    try {
+      if (values.authType !== "none" && values.authValue) await storeApiKey("custom", values.authValue);
+      await saveCustomLlmConfig({ baseUrl: values.baseUrl, authType: values.authType });
+      await renderProviderCards();
+      button.textContent = "Added ✓";
+      window.setTimeout(() => { button.textContent = "Add as provider"; }, 1400);
+    } catch (error) {
+      console.warn("[CustomEndpointProviders] add failed", error);
     }
-  }
+  });
+
+  card.appendChild(button);
 }
 
-async function mountPicker(): Promise<void> {
-  const input = document.querySelector<HTMLInputElement>(
-    `input[placeholder="${BASE_URL_PLACEHOLDER}"]`
-  );
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>\"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c] || c));
+}
+
+async function applyProfile(profile: { baseUrl: string; authType: "none" | "bearer" | "api_key" }): Promise<void> {
+  const input = document.querySelector<HTMLInputElement>(`input[placeholder="${BASE_URL_PLACEHOLDER}"]`);
   if (!input) return;
-
   const card = findCustomCard(input);
-  if (!card) return;
+  setControlledInputValue(input, profile.baseUrl);
+  if (card) {
+    const authSelect = Array.from(card.querySelectorAll("select")).find((select) => Array.from(select.options).some((o) => ["none", "bearer", "api_key"].includes(o.value)));
+    if (authSelect) setControlledSelectValue(authSelect, profile.authType);
+    const token = Array.from(card.querySelectorAll<HTMLInputElement>('input[type="password"]')).find((field) => field !== input);
+    if (token) setControlledInputValue(token, (await getCustomLlmEndpointKey(profile.baseUrl)) || "");
+  }
+  await selectCustomLlmEndpoint(profile.baseUrl);
+}
 
-  // The settings component can mount/re-render more than once. Keep exactly
-  // one picker in the Custom Provider card, not one picker per render/module.
-  if (card.querySelector(`[${UI_MARKER}]`)) return;
-
-  const wrapper = document.createElement("div");
-  wrapper.setAttribute(UI_MARKER, "true");
-  wrapper.className = "mb-3";
-
-  const label = document.createElement("label");
-  label.textContent = "Saved endpoints";
-  label.className = "mb-1.5 block text-xs font-medium text-foreground";
-
-  const select = document.createElement("select");
-  select.className =
-    "w-full rounded-lg border border-border/50 bg-background px-3.5 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20 cursor-pointer";
-
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.textContent = "Select a saved endpoint...";
-  select.appendChild(placeholder);
-
+async function renderProviderCards(): Promise<void> {
+  const input = document.querySelector<HTMLInputElement>(`input[placeholder="${BASE_URL_PLACEHOLDER}"]`);
+  if (!input) return;
+  const grid = findProviderGrid(input);
+  if (!grid) return;
   const profiles = await getCustomLlmEndpointProfiles();
+  const existing = new Set(Array.from(grid.querySelectorAll<HTMLElement>(`[${CARD_MARKER}]`)).map((el) => el.dataset.nexqCustomProvider || ""));
   for (const profile of profiles) {
-    const option = document.createElement("option");
-    option.value = profile.baseUrl;
-    option.textContent = `${profile.label} — ${profile.baseUrl}`;
-    select.appendChild(option);
-  }
-
-  const current = input.value.trim().replace(/\/+$/, "");
-  if (current && profiles.some((profile) => profile.baseUrl === current)) {
-    select.value = current;
-  }
-
-  select.addEventListener("change", () => {
-    const value = select.value;
-    if (!value) return;
-    applyProfile(value).catch((error) => {
-      console.warn("[CustomEndpointPicker] Failed to restore endpoint:", error);
-    });
-  });
-
-  wrapper.appendChild(label);
-  wrapper.appendChild(select);
-
-  // Insert directly above the Base URL field without changing the React tree.
-  const baseSection = input.closest("div")?.parentElement;
-  if (baseSection?.parentElement) {
-    baseSection.parentElement.insertBefore(wrapper, baseSection);
-  } else {
-    card.insertBefore(wrapper, card.firstChild);
+    if (existing.has(profile.baseUrl)) continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute(CARD_MARKER, "true");
+    button.dataset.nexqCustomProvider = profile.baseUrl;
+    button.className = "relative flex min-h-[108px] flex-col items-start rounded-xl border border-border/50 p-3 text-left transition-all duration-150 hover:border-border hover:bg-accent/50 cursor-pointer";
+    button.innerHTML = `<div class="absolute -top-1 -right-1"><div class="h-2.5 w-2.5 rounded-full bg-success ring-2 ring-card"></div></div><div class="flex w-full items-center gap-1.5"><span class="text-xs font-medium truncate">Custom · ${escapeHtml(profile.label)}</span></div><span class="mt-0.5 text-meta text-muted-foreground line-clamp-2 break-all">${escapeHtml(profile.baseUrl)}</span><span class="mt-1.5 inline-flex items-center rounded-full border px-1.5 py-0.5 text-meta font-medium bg-success/10 text-success border-success/20">Saved</span>`;
+    button.addEventListener("click", () => applyProfile(profile).catch((error) => console.warn("[CustomEndpointProviders] select failed", error)));
+    grid.appendChild(button);
   }
 }
 
-function observeSettingsDom(): void {
-  if (typeof window === "undefined" || typeof document === "undefined") return;
+let scheduled = false;
+function scheduleMount(): void {
+  if (scheduled) return;
+  scheduled = true;
+  window.setTimeout(() => {
+    scheduled = false;
+    mountAddButton().catch(() => {});
+    renderProviderCards().catch(() => {});
+  }, 75);
+}
 
-  const observer = new MutationObserver(() => {
-    mountPicker().catch(() => {});
-  });
-
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+  const observer = new MutationObserver(scheduleMount);
   const start = () => {
     if (!document.body) return;
     observer.observe(document.body, { childList: true, subtree: true });
-    mountPicker().catch(() => {});
+    scheduleMount();
   };
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", start, { once: true });
-  } else {
-    start();
-  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
+  else start();
 }
-
-observeSettingsDom();
