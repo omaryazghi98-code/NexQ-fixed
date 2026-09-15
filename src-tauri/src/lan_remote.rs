@@ -15,7 +15,7 @@ use axum::{
     routing::get,
     Router,
 };
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 use std::net::{IpAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, oneshot};
@@ -39,7 +39,7 @@ pub struct LanRemoteManager {
     port: u16,
     tx: Option<broadcast::Sender<String>>,
     shutdown: Option<oneshot::Sender<()>>,
-    task: Option<tokio::task::JoinHandle<()>>,
+    task: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
 impl Default for LanRemoteManager {
@@ -77,8 +77,10 @@ impl LanRemoteManager {
         std_listener
             .set_nonblocking(true)
             .map_err(|e| format!("Failed to configure LAN remote listener: {}", e))?;
-        let listener = tokio::net::TcpListener::from_std(std_listener)
-            .map_err(|e| format!("Failed to initialize LAN remote listener: {}", e))?;
+        let bound_port = std_listener
+            .local_addr()
+            .map_err(|e| format!("Failed to read LAN remote address: {}", e))?
+            .port();
 
         let (tx, _rx) = broadcast::channel(CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -87,16 +89,19 @@ impl LanRemoteManager {
             .route("/ws", get(websocket_handler))
             .with_state(ServerState { tx: tx.clone() });
 
-        let bound_port = listener
-            .local_addr()
-            .map_err(|e| format!("Failed to read LAN remote address: {}", e))?
-            .port();
-
         self.port = bound_port;
         self.tx = Some(tx);
         self.shutdown = Some(shutdown_tx);
 
-        let task = tokio::spawn(async move {
+        let task = tauri::async_runtime::spawn(async move {
+            let listener = match tokio::net::TcpListener::from_std(std_listener) {
+                Ok(listener) => listener,
+                Err(e) => {
+                    log::error!("Failed to initialize LAN remote listener: {}", e);
+                    return;
+                }
+            };
+
             let result = axum::serve(listener, app)
                 .with_graceful_shutdown(async move {
                     let _ = shutdown_rx.await;
