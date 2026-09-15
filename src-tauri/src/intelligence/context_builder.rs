@@ -8,32 +8,27 @@
 //   2. Meeting Transcript — controlled by `include_transcript`, windowed by caller
 //   3. User's Question — always included when provided (user explicitly typed it)
 //   4. Detected Question — controlled by `include_question`
-//
-// NO hardcoded per-mode instructions. Custom actions work identically to built-in ones.
 
 use crate::llm::provider::LLMMessage;
 
 use super::question_detector::DetectedQuestion;
 
+const VERIFIED_CANDIDATE_FACTS: &str = "\
+- Comdata: inbound/outbound telephone customer support; handled complex cases and escalated or coordinated with external/internal teams. Do not describe Comdata as chat support or multiple simultaneous chats.\
+- Spotify: chat-only support; handled multiple concurrent live chats.\
+- Epic Games/5CA: gaming/player support.\
+- ENGIE: inbound telephone support; handled tense customer calls and stayed calm while working toward a solution.\
+- Airalo: eSIM troubleshooting including ICCID, APN, and device compatibility.\
+- Beerwulf: handled damaged or missing components and replacement/refund cases.\
+- Never invent an employer, title, responsibility, tool, support channel, workload, achievement, metric, or experience. Never move a fact from one employer/project to another.\
+Use these only when relevant; do not force them into unrelated answers.";
+
 /// Builds the full prompt (list of LLMMessages) sent to the LLM.
-/// Universal builder — no hardcoded per-mode logic. All behavior is driven
-/// by the per-action config from the settings page.
 pub struct ContextBuilder;
 
 impl ContextBuilder {
-    pub fn new() -> Self {
-        Self
-    }
+    pub fn new() -> Self { Self }
 
-    /// Build prompt with per-action configuration flags.
-    ///
-    /// The caller (intelligence_commands.rs) resolves all settings:
-    /// - system_prompt: per-action editable prompt + composed instructions
-    /// - include_context: whether RAG chunks appear in user message
-    /// - include_transcript: whether transcript appears in user message
-    /// - include_question: whether auto-detected question appears
-    /// - transcript windowing and RAG top_k are applied BEFORE calling this
-    /// - temperature is passed separately to the LLM provider
     pub fn build_prompt_with_config(
         &self,
         system_prompt: &str,
@@ -46,63 +41,28 @@ impl ContextBuilder {
         include_question: bool,
     ) -> Vec<LLMMessage> {
         let mut messages: Vec<LLMMessage> = Vec::new();
+        messages.push(LLMMessage { role: "system".to_string(), content: system_prompt.to_string() });
 
-        // 1. System prompt — the ONLY instruction.
-        // Already contains: per-action editable prompt + composed instructions
-        // (tone/format/length/custom text) if `include_custom_instructions` is on.
-        // This is fully configurable from the settings page.
-        messages.push(LLMMessage {
-            role: "system".to_string(),
-            content: system_prompt.to_string(),
-        });
-
-        // 2. User message — ONLY data sections, NO hardcoded instructions.
-        // Each section is independently togglable per action.
         let mut user_parts: Vec<String> = Vec::new();
-
-        // RAG chunks (controlled by `includeRagChunks` per-action toggle)
-        // top_k filtering already applied by caller before reaching here
         if include_context && !context_text.is_empty() {
-            user_parts.push(format!(
-                "## Reference Materials\n{}\n",
-                context_text
-            ));
+            user_parts.push(format!("## Reference Materials\n{}\n", context_text));
         }
-
-        // Transcript (controlled by `includeTranscript` per-action toggle)
-        // Window filtering already applied by caller (per-action or global window)
         if include_transcript && !transcript_text.is_empty() {
-            user_parts.push(format!(
-                "## Meeting Transcript (Recent)\n{}\n",
-                transcript_text
-            ));
+            user_parts.push(format!("## Meeting Transcript (Recent)\n{}\n", transcript_text));
         }
-
-        // User's typed question — always included when provided.
-        // The user explicitly typed this, so it's always relevant.
         if let Some(q) = custom_question {
-            if !q.is_empty() {
-                user_parts.push(format!("## User's Question\n{}\n", q));
-            }
+            if !q.is_empty() { user_parts.push(format!("## User's Question\n{}\n", q)); }
         }
-
-        // Detected question (controlled by `includeDetectedQuestion` per-action toggle)
         if include_question {
             if let Some(q) = question {
-                user_parts.push(format!(
-                    "## Detected Question (confidence: {:.0}%)\n{}\n",
-                    q.confidence * 100.0,
-                    q.text
-                ));
+                user_parts.push(format!("## Detected Question (confidence: {:.0}%)\n{}\n", q.confidence * 100.0, q.text));
             }
         }
+        if system_prompt.to_ascii_lowercase().contains("real-time response coach") {
+            user_parts.push(format!("## Verified Candidate Facts\n{}\n", VERIFIED_CANDIDATE_FACTS));
+        }
 
-        let user_content = user_parts.join("\n");
-        messages.push(LLMMessage {
-            role: "user".to_string(),
-            content: user_content,
-        });
-
+        messages.push(LLMMessage { role: "user".to_string(), content: user_parts.join("\n") });
         messages
     }
 }
