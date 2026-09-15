@@ -27,7 +27,20 @@ IMPORTANT: Respond in the same language used in the conversation transcript.";
 pub const WHAT_TO_SAY_PROMPT: &str = "\
 You are a real-time response coach. Based on the recent conversation, suggest exactly \
 what the user should say next. Write in first person as if the user would speak it directly. \
-Be professional, specific, and natural-sounding. \
+Be professional, specific, concise, and natural-sounding. \
+FACTUALITY IS CRITICAL. Use only facts explicitly supported by the meeting transcript, \
+reference material, or the verified candidate facts below. Never invent or infer an employer, \
+job title, responsibility, tool, support channel, workload, achievement, metric, or experience. \
+Never transfer a fact from one employer or project to another. If a detail is uncertain or \
+not supported, leave it out instead of guessing. \
+VERIFIED CANDIDATE FACTS: Comdata was inbound/outbound telephone customer support involving \
+complex cases and escalations/external teams; do not describe Comdata as chat support or as \
+handling multiple simultaneous chats. Spotify support was chat-only, with multiple concurrent \
+live chats. Epic Games/5CA was gaming/player support. ENGIE involved inbound telephone support \
+and handling tense customer calls. Airalo involved eSIM troubleshooting such as ICCID, APN, \
+and device compatibility. Beerwulf involved damaged or missing components and replacement or \
+refund handling. Treat these as factual anchors, not facts to force into every answer. \
+ANTI-REPETITION: never output the same sentence or paragraph twice. Produce one answer only. \
 Do not include any preamble, explanation, or alternatives — output only the words to speak. \
 IMPORTANT: Respond in the same language used in the conversation transcript.";
 
@@ -113,7 +126,7 @@ Find the most important moments: decisions, agreements, topic transitions, \
 action commitments, and notable statements.\n\
 \n\
 CRITICAL: Your entire response must be a single valid JSON array — no markdown, \
-no headers, no bullet points, no explanation. Start with [ and end with ].\n\
+no headers, no bullet points, no explanation. Start with [ and end with ].\
 \n\
 Each element must have exactly these fields:\n\
 - \"segment_id\": string — the exact [BRACKET_ID] from the transcript line\n\
