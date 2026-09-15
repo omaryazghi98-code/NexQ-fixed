@@ -1,13 +1,8 @@
 //! Realtime LAN remote transport for the NexQ overlay.
 //!
-//! The first iteration deliberately keeps the transport thin:
-//! - NexQ publishes typed JSON envelopes from the existing transcript/translation events.
-//! - A small HTTP page is served on the same port for a second-screen browser.
-//! - WebSocket clients receive the same event stream in realtime.
-//!
-//! This module does not run STT or translation itself. It transports the results that
-//! NexQ already produces, which keeps provider selection and latency-sensitive work
-//! inside the existing pipeline.
+//! The LAN second screen is intentionally answer-focused: it receives the
+//! same streaming AI response shown by the Assist / What To Say panel, but
+//! does not expose the interview transcript.
 
 use axum::{
     extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State},
@@ -152,7 +147,7 @@ async fn handle_socket(mut socket: WebSocket, mut rx: broadcast::Receiver<String
                 "version": 1,
                 "type": "hello",
                 "source": "nexq",
-                "message": "NexQ LAN remote connected"
+                "message": "NexQ AI Remote connected"
             })
             .to_string()
             .into(),
@@ -192,68 +187,99 @@ async fn remote_page() -> Html<&'static str> {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>NexQ Remote</title>
+<title>NexQ AI Remote</title>
 <style>
   :root { color-scheme: dark; font-family: Inter, Segoe UI, sans-serif; }
   * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; background: #08090b; color: #f3f4f6; }
-  header { position: sticky; top: 0; z-index: 2; padding: 16px 20px; border-bottom: 1px solid #202329; background: rgba(8,9,11,.94); backdrop-filter: blur(12px); }
+  html, body { margin: 0; min-height: 100%; background: #07090c; color: #f5f7fa; }
+  body { min-height: 100vh; }
+  header { position: sticky; top: 0; z-index: 2; padding: 18px 28px; border-bottom: 1px solid #20242a; background: rgba(7,9,12,.94); backdrop-filter: blur(14px); }
   .row { display:flex; align-items:center; gap:10px; }
-  .dot { width:9px; height:9px; border-radius:50%; background:#555; }
-  .dot.ok { background:#4ade80; box-shadow: 0 0 12px rgba(74,222,128,.5); }
-  .meta { color:#8f96a3; font-size:12px; }
-  main { width:min(1100px, 100%); margin:0 auto; padding:18px 20px 48px; }
-  .empty { padding:60px 16px; text-align:center; color:#757b86; }
-  .seg { padding:14px 0; border-bottom:1px solid #17191d; }
-  .seg.interim { opacity:.72; }
-  .top { display:flex; gap:10px; align-items:baseline; }
-  .speaker { font-size:12px; font-weight:700; color:#aab1bd; letter-spacing:.04em; text-transform:uppercase; }
-  .time { font-size:11px; color:#555b66; }
-  .src { margin-top:6px; font-size:18px; line-height:1.42; }
-  .tr { margin-top:8px; font-size:20px; line-height:1.45; color:#fff; }
-  .tr:empty { display:none; }
-  .banner { padding:10px 12px; border:1px solid #292d35; border-radius:10px; color:#aeb5c1; background:#0d0f12; margin-bottom:16px; font-size:12px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:#555b63; }
+  .dot.ok { background:#4ade80; box-shadow:0 0 14px rgba(74,222,128,.45); }
+  .meta { color:#8d95a0; font-size:13px; }
+  main { width:min(1200px, 100%); min-height:calc(100vh - 70px); margin:0 auto; padding:32px 28px 64px; display:flex; flex-direction:column; }
+  .mode { align-self:flex-start; margin-bottom:18px; padding:7px 12px; border:1px solid #28313b; border-radius:999px; color:#aeb8c4; background:#0d1116; font-size:13px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
+  .answer { flex:1; display:flex; align-items:flex-start; justify-content:center; }
+  .answer-inner { width:100%; padding:12vh 3vw 8vh; }
+  .answer-text { font-size:clamp(32px, 5vw, 76px); line-height:1.2; font-weight:650; letter-spacing:-.02em; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .cursor { display:inline-block; width:.08em; height:1em; margin-left:.12em; vertical-align:-.08em; background:#8ab4ff; animation:blink 1s steps(2,end) infinite; }
+  .waiting { margin:auto; color:#626b76; font-size:18px; text-align:center; }
+  .hint { margin-top:auto; padding-top:24px; color:#4f5761; text-align:center; font-size:12px; }
+  .error { color:#f0a7a7; }
+  @keyframes blink { 50% { opacity:0; } }
+  @media (max-width:700px) {
+    header { padding:14px 16px; }
+    main { padding:20px 16px 40px; }
+    .answer-inner { padding:10vh 0 6vh; }
+    .answer-text { font-size:clamp(30px, 8vw, 52px); }
+  }
 </style>
 </head>
 <body>
 <header>
-  <div class="row"><span id="dot" class="dot"></span><strong>NexQ Remote</strong><span id="status" class="meta">connecting…</span></div>
+  <div class="row"><span id="dot" class="dot"></span><strong>NexQ AI Remote</strong><span id="status" class="meta">connecting…</span></div>
 </header>
 <main>
-  <div class="banner">LAN remote v1 · live transcript + translation. Keep this page on the second screen.</div>
-  <div id="segments"><div class="empty">Waiting for NexQ…</div></div>
+  <div id="mode" class="mode">Ready</div>
+  <section class="answer" aria-live="polite" aria-label="NexQ AI response">
+    <div class="answer-inner">
+      <div id="waiting" class="waiting">Waiting for AI assistance…</div>
+      <div id="answer" class="answer-text" hidden></div>
+    </div>
+  </section>
+  <div id="hint" class="hint">AI answer screen · Assist / What To Say · large text</div>
 </main>
 <script>
-const segments = new Map();
-const container = document.getElementById('segments');
 const dot = document.getElementById('dot');
 const status = document.getElementById('status');
-function fmt(ms){ if(!Number.isFinite(ms)) return ''; const d=new Date(ms); return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
-function render(seg){
-  let el = segments.get(seg.id);
-  if(!el){
-    el=document.createElement('section'); el.className='seg'; el.dataset.id=seg.id;
-    el.innerHTML='<div class="top"><span class="speaker"></span><span class="time"></span></div><div class="src"></div><div class="tr"></div>';
-    segments.set(seg.id,el); container.querySelector('.empty')?.remove(); container.appendChild(el);
-  }
-  el.classList.toggle('interim', !seg.is_final);
-  el.querySelector('.speaker').textContent=seg.speaker_id || seg.speaker || 'Speaker';
-  el.querySelector('.time').textContent=fmt(seg.timestamp_ms);
-  el.querySelector('.src').textContent=seg.text || '';
-  if(seg.translated_text !== undefined) el.querySelector('.tr').textContent=seg.translated_text || '';
+const mode = document.getElementById('mode');
+const waiting = document.getElementById('waiting');
+const answer = document.getElementById('answer');
+let streamActive = false;
+function modeLabel(value){
+  const labels={Assist:'Assist',WhatToSay:'What To Say',Shorten:'Shorten',FollowUp:'Follow Up',Recap:'Recap',AskQuestion:'Ask Question',MeetingSummary:'Meeting Summary',ActionItemsExtraction:'Action Items',BookmarkSuggestions:'Suggestions'};
+  return labels[value] || value || 'AI Assist';
+}
+function show(text){
+  waiting.hidden = !!text;
+  answer.hidden = !text;
+  answer.textContent = text || '';
 }
 function apply(msg){
-  if(msg.type==='transcript'){ render(msg.payload); return; }
-  if(msg.type==='translation'){
-    const p=msg.payload || {};
-    let el=segments.get(p.segment_id);
-    if(!el){ render({id:p.segment_id,text:p.original_text||'',timestamp_ms:Date.now(),is_final:true,speaker_id:'Speaker',translated_text:p.translated_text||''}); }
-    else el.querySelector('.tr').textContent=p.translated_text || '';
+  if(msg.type==='ai_start'){
+    const p=msg.payload||{};
+    streamActive=true;
+    mode.textContent=modeLabel(p.mode);
+    show('');
+    answer.hidden=false;
+    answer.textContent='';
+    const cursor=document.createElement('span');
+    cursor.className='cursor';
+    answer.appendChild(cursor);
+    return;
+  }
+  if(msg.type==='ai_token'){
+    const p=msg.payload||{};
+    if(!streamActive){ streamActive=true; show(''); answer.hidden=false; answer.textContent=''; }
+    const cursor=answer.querySelector('.cursor');
+    if(cursor) cursor.remove();
+    answer.appendChild(document.createTextNode(p.token || ''));
+    const nextCursor=document.createElement('span');
+    nextCursor.className='cursor';
+    answer.appendChild(nextCursor);
+    return;
+  }
+  if(msg.type==='ai_end'){
+    streamActive=false;
+    const cursor=answer.querySelector('.cursor');
+    if(cursor) cursor.remove();
+    return;
   }
 }
 function connect(){
   const proto=location.protocol==='https:'?'wss':'ws';
-  const ws=new WebSocket(`${proto}://${location.host}/ws?v=1`);
+  const ws=new WebSocket(`${proto}://${location.host}/ws?v=2`);
   ws.onopen=()=>{ dot.classList.add('ok'); status.textContent='connected'; };
   ws.onclose=()=>{ dot.classList.remove('ok'); status.textContent='reconnecting…'; setTimeout(connect,1200); };
   ws.onerror=()=>{ dot.classList.remove('ok'); status.textContent='connection error'; };
@@ -261,7 +287,8 @@ function connect(){
 }
 connect();
 </script>
-</body></html>"#,
+</body>
+</html>"#,
     )
 }
 
