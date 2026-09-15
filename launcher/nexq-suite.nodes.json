@@ -1,0 +1,8 @@
+{
+  "controller": { "name": "Acer", "host": "", "port": 17330 },
+  "nodes": [
+    { "id": "hp", "name": "HP — Interview", "host": "", "port": 17330, "role": "Interview host" },
+    { "id": "lenovo", "name": "Lenovo — AI Core", "host": "", "port": 17330, "role": "NexQ + 3V0L + AI" },
+    { "id": "acer", "name": "Acer — Teleprompter", "host": "", "port": 17330, "role": "Teleprompter + Barrier" }
+  ]
+}
