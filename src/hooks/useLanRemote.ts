@@ -19,6 +19,7 @@ import {
 export function useLanRemote() {
   useEffect(() => {
     let mounted = true;
+    let accumulatedContent = "";
     const unlisteners: Array<() => void> = [];
 
     const setup = async () => {
@@ -40,11 +41,25 @@ export function useLanRemote() {
       }
 
       const startUnlisten = await onStreamStart((event) => {
+        accumulatedContent = "";
         publishLanAiStart(event.mode).catch(() => {});
       });
 
       const tokenUnlisten = await onStreamToken((event) => {
-        publishLanAiToken(event.token).catch(() => {});
+        const incoming = event.token || "";
+        if (!incoming) return;
+
+        // NexQ normally emits deltas, but this also tolerates providers that
+        // occasionally emit cumulative snapshots.
+        if (!accumulatedContent) {
+          accumulatedContent = incoming;
+        } else if (incoming.startsWith(accumulatedContent)) {
+          accumulatedContent = incoming;
+        } else if (!accumulatedContent.endsWith(incoming)) {
+          accumulatedContent += incoming;
+        }
+
+        publishLanAiToken(incoming, accumulatedContent).catch(() => {});
       });
 
       const endUnlisten = await onStreamEnd(() => {
