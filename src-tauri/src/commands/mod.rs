@@ -15,3 +15,4 @@ pub mod translation_commands;
 pub mod translation_model_commands;
 pub mod tray_commands;
 pub mod updater_commands;
+pub mod lan_remote_commands;
