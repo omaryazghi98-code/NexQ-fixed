@@ -55,7 +55,7 @@ impl Default for LanRemoteManager {
 
 impl LanRemoteManager {
     pub fn is_running(&self) -> bool {
-        self.task.as_ref().is_some_and(|task| !task.is_finished())
+        self.task.is_some()
     }
 
     pub fn info(&self) -> LanRemoteInfo {
