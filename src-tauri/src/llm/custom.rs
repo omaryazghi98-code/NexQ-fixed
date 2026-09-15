@@ -34,13 +34,33 @@ pub struct CustomClient {
 
 impl CustomClient {
     pub fn new(mut config: CustomConfig) -> Self {
-        // Accept either https://host/v1 or https://host/v1/ in the UI,
-        // but always build normalized endpoint paths internally.
+        // Accept either a base /v1 URL or a pasted endpoint URL such as
+        // /responses or /chat/completions. Normalize it once here so the
+        // provider can safely build the appropriate endpoint internally.
         config.base_url = config.base_url.trim_end_matches('/').to_string();
+        for suffix in ["/responses", "/chat/completions"] {
+            if config.base_url.ends_with(suffix) {
+                config.base_url.truncate(config.base_url.len() - suffix.len());
+                break;
+            }
+        }
         Self {
             config,
             client: reqwest::Client::new(),
         }
+    }
+
+    fn is_azure_foundry(&self) -> bool {
+        self.config.base_url.contains(".services.ai.azure.com")
+            || self.config.base_url.contains(".openai.azure.com")
+    }
+
+    fn uses_responses_api(&self) -> bool {
+        // Current Azure AI Foundry resource/project endpoints expose the
+        // OpenAI v1 Responses API. Keep the OpenAI resource endpoint path on
+        // the chat-compatible path unless the newer Foundry services endpoint
+        // is detected explicitly.
+        self.config.base_url.contains(".services.ai.azure.com")
     }
 
     /// Apply authentication to a request based on the configured auth type.
@@ -55,10 +75,14 @@ impl CustomClient {
                 }
             }
             CustomAuthType::ApiKey => {
+                // Azure OpenAI / Foundry API-key authentication uses the
+                // `api-key` header. Other custom endpoints retain x-api-key
+                // as the existing default unless the caller supplies a header.
                 let header = self
                     .config
                     .auth_header
                     .as_deref()
+                    .or_else(|| self.is_azure_foundry().then_some("api-key"))
                     .unwrap_or("x-api-key");
                 if let Some(ref key) = self.config.auth_value {
                     builder.header(header, key.as_str())
@@ -80,7 +104,29 @@ impl CustomClient {
             for event in sse_events {
                 match event {
                     Some(data) => {
-                        // Try OpenAI-compat format
+                        // OpenAI Responses API streaming event. This is used
+                        // by current Azure Foundry `.../openai/v1/responses`.
+                        if data
+                            .get("type")
+                            .and_then(|t| t.as_str())
+                            == Some("response.output_text.delta")
+                        {
+                            if let Some(delta) = data.get("delta").and_then(|d| d.as_str()) {
+                                results.push((Some(delta.to_string()), false));
+                                continue;
+                            }
+                        }
+
+                        if data
+                            .get("type")
+                            .and_then(|t| t.as_str())
+                            == Some("response.completed")
+                        {
+                            results.push((None, true));
+                            continue;
+                        }
+
+                        // Try OpenAI-compatible chat completions format
                         if let Some(token) = SSEParser::extract_openai_token(&data) {
                             results.push((Some(token), false));
                             continue;
@@ -253,9 +299,6 @@ impl LLMProvider for CustomClient {
     ) -> Result<CompletionStats, LLMError> {
         let start = Instant::now();
 
-        // OpenAI-compatible chat completions endpoint.
-        let url = format!("{}/chat/completions", self.config.base_url);
-
         let msgs: Vec<serde_json::Value> = messages
             .iter()
             .map(|m| {
@@ -266,21 +309,34 @@ impl LLMProvider for CustomClient {
             })
             .collect();
 
-        let mut body = json!({
-            "model": model,
-            "messages": msgs,
-            "stream": true
-        });
+        let (url, body) = if self.uses_responses_api() {
+            let url = format!("{}/responses", self.config.base_url);
+            let mut body = json!({
+                "model": model,
+                "input": msgs,
+                "stream": true
+            });
+            if let Some(max_tok) = params.max_tokens {
+                body["max_output_tokens"] = json!(max_tok);
+            }
+            (url, body)
+        } else {
+            // OpenAI-compatible chat completions endpoint.
+            let url = format!("{}/chat/completions", self.config.base_url);
+            let mut body = json!({
+                "model": model,
+                "messages": msgs,
+                "stream": true
+            });
+            if let Some(temp) = params.temperature {
+                body["temperature"] = json!(temp);
+            }
+            if let Some(max_tok) = params.max_tokens {
+                body["max_tokens"] = json!(max_tok);
+            }
+            (url, body)
+        };
 
-        if let Some(temp) = params.temperature {
-            body["temperature"] = json!(temp);
-        }
-        if let Some(max_tok) = params.max_tokens {
-            body["max_tokens"] = json!(max_tok);
-        }
-
-        // Requesty is OpenAI-compatible. These headers are optional but useful
-        // for attribution and analytics when routing through Requesty.
         let mut request = self
             .apply_auth(self.client.post(&url))
             .header("Content-Type", "application/json");
