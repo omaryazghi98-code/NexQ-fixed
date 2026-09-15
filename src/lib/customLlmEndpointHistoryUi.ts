@@ -67,10 +67,13 @@ async function mountPicker(): Promise<void> {
     `input[placeholder="${BASE_URL_PLACEHOLDER}"]`
   );
   if (!input) return;
-  if (input.parentElement?.querySelector(`[${UI_MARKER}]`)) return;
 
   const card = findCustomCard(input);
   if (!card) return;
+
+  // The settings component can mount/re-render more than once. Keep exactly
+  // one picker in the Custom Provider card, not one picker per render/module.
+  if (card.querySelector(`[${UI_MARKER}]`)) return;
 
   const wrapper = document.createElement("div");
   wrapper.setAttribute(UI_MARKER, "true");
