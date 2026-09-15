@@ -26,10 +26,10 @@ export async function publishLanAiStart(mode: IntelligenceMode): Promise<void> {
   });
 }
 
-export async function publishLanAiToken(token: string): Promise<void> {
+export async function publishLanAiToken(token: string, content: string): Promise<void> {
   await invoke("lan_publish", {
     kind: "ai_token",
-    payloadJson: JSON.stringify({ token }),
+    payloadJson: JSON.stringify({ token, content }),
   });
 }
 
