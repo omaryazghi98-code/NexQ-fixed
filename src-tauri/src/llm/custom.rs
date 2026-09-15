@@ -204,7 +204,7 @@ impl LLMProvider for CustomClient {
         match request.send().await {
             Ok(response) if response.status().is_success() => {
                 let body: serde_json::Value = response.json().await?;
-                let models = body
+                let mut models = body
                     .get("data")
                     .and_then(|d| d.as_array())
                     .map(|arr| {
@@ -222,9 +222,24 @@ impl LLMProvider for CustomClient {
                                     context_window: None,
                                 })
                             })
-                            .collect()
+                            .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
+
+                // Azure Foundry's /models endpoint exposes model IDs, while
+                // inference requires the deployment name. Expose the known
+                // NexQ fine-tuned deployment so it can be selected explicitly.
+                if self.is_azure_foundry()
+                    && !models.iter().any(|m| m.id == "nexq-interview")
+                {
+                    models.push(ModelInfo {
+                        id: "nexq-interview".to_string(),
+                        name: "nexq-interview (Azure deployment)".to_string(),
+                        provider: "custom".to_string(),
+                        context_window: None,
+                    });
+                }
+
                 Ok(models)
             }
             _ => {
@@ -256,7 +271,16 @@ impl LLMProvider for CustomClient {
                     }
                     _ => {
                         // Return empty list - user can type model name manually
-                        Ok(vec![])
+                        if self.is_azure_foundry() {
+                            Ok(vec![ModelInfo {
+                                id: "nexq-interview".to_string(),
+                                name: "nexq-interview (Azure deployment)".to_string(),
+                                provider: "custom".to_string(),
+                                context_window: None,
+                            }])
+                        } else {
+                            Ok(vec![])
+                        }
                     }
                 }
             }
