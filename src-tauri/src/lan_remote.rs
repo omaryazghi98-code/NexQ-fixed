@@ -6,12 +6,17 @@
 //! phone remote for scrolling the display.
 
 use axum::{
-    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        State, Json,
+    },
+    http::StatusCode,
     response::Html,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use futures::StreamExt;
+use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, oneshot};
@@ -24,11 +29,20 @@ struct ServerState {
     tx: broadcast::Sender<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct LanRemoteInfo {
     pub running: bool,
     pub port: u16,
     pub urls: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ControlMessage {
+    #[serde(rename = "type")]
+    kind: String,
+    action: String,
+    #[serde(default)]
+    source: Option<String>,
 }
 
 pub struct LanRemoteManager {
@@ -84,6 +98,7 @@ impl LanRemoteManager {
             .route("/", get(remote_page))
             .route("/control", get(control_page))
             .route("/ws", get(websocket_handler))
+            .route("/control", post(control_http_handler))
             .with_state(ServerState { tx: tx.clone() });
 
         self.port = bound_port;
@@ -143,6 +158,56 @@ async fn websocket_handler(
     ws.on_upgrade(move |socket| handle_socket(socket, tx.subscribe(), tx))
 }
 
+async fn control_http_handler(
+    State(state): State<ServerState>,
+    Json(mut message): Json<ControlMessage>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    if message.kind != "control" || !is_supported_action(&message.action) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"ok": false, "error": "invalid control command"})),
+        );
+    }
+
+    message.source.get_or_insert_with(|| "http".to_string());
+    let payload = match serde_json::to_string(&message) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"ok": false, "error": error.to_string()})),
+            )
+        }
+    };
+
+    match state.tx.send(payload) {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"ok": true})),
+        ),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"ok": false, "error": "no remote display connected"})),
+        ),
+    }
+}
+
+fn is_supported_action(action: &str) -> bool {
+    matches!(
+        action,
+        "top"
+            | "bottom"
+            | "up"
+            | "down"
+            | "page_up"
+            | "page_down"
+            | "scroll_up"
+            | "scroll_down"
+            | "pageUp"
+            | "pageDown"
+    )
+}
+
 async fn handle_socket(
     mut socket: WebSocket,
     mut rx: broadcast::Receiver<String>,
@@ -167,11 +232,17 @@ async fn handle_socket(
                 match inbound {
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(Message::Text(text))) => {
-                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
-                            if value.get("type").and_then(|v| v.as_str()) == Some("control") {
-                                let _ = tx.send(text.to_string());
+                        if let Ok(mut value) = serde_json::from_str::<ControlMessage>(&text) {
+                            if value.kind == "control" && is_supported_action(&value.action) {
+                                value.source.get_or_insert_with(|| "websocket".to_string());
+                                if let Ok(normalized) = serde_json::to_string(&value) {
+                                    let _ = tx.send(normalized);
+                                }
                             }
                         }
+                    }
+                    Some(Ok(Message::Ping(payload))) => {
+                        let _ = socket.send(Message::Pong(payload)).await;
                     }
                     Some(Ok(_)) => {}
                     Some(Err(_)) => break,
@@ -301,15 +372,16 @@ function apply(msg){
   }
   if(msg.type==='control'){
     const action=(msg.action||msg.payload?.action||'');
+    const normalized={scroll_up:'up',scroll_down:'down',pageUp:'page_up',pageDown:'page_down'}[action]||action;
     const amounts={up:-220,down:220,page_up:-window.innerHeight*0.82,page_down:window.innerHeight*0.82};
-    if(action==='top') window.scrollTo({top:0,behavior:'smooth'});
-    else if(action==='bottom') window.scrollTo({top:document.documentElement.scrollHeight,behavior:'smooth'});
-    else if(amounts[action]) window.scrollBy({top:amounts[action],behavior:'smooth'});
+    if(normalized==='top') window.scrollTo({top:0,behavior:'smooth'});
+    else if(normalized==='bottom') window.scrollTo({top:document.documentElement.scrollHeight,behavior:'smooth'});
+    else if(amounts[normalized]) window.scrollBy({top:amounts[normalized],behavior:'smooth'});
   }
 }
 function connect(){
   const proto=location.protocol==='https:'?'wss':'ws';
-  const ws=new WebSocket(`${proto}://${location.host}/ws?v=3`);
+  const ws=new WebSocket(`${proto}://${location.host}/ws?v=4`);
   ws.onopen=()=>{dot.classList.add('ok');status.textContent='connected';};
   ws.onclose=()=>{dot.classList.remove('ok');status.textContent='reconnecting…';setTimeout(connect,1200);};
   ws.onerror=()=>{dot.classList.remove('ok');status.textContent='connection error';};
@@ -327,12 +399,14 @@ async fn control_page() -> Html<&'static str> {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <title>NexQ Phone Controller</title>
 <style>
   :root { color-scheme:dark; font-family:Inter,Segoe UI,sans-serif; }
   * { box-sizing:border-box; }
   html,body { margin:0; min-height:100%; background:#07090c; color:#f5f7fa; }
-  body { min-height:100vh; display:flex; flex-direction:column; touch-action:manipulation; }
+  body { min-height:100vh; display:flex; flex-direction:column; touch-action:pan-y; overscroll-behavior:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
   header { padding:18px 18px 14px; border-bottom:1px solid #20242a; background:#0a0d11; }
   .row { display:flex; align-items:center; gap:10px; }
   .dot { width:9px; height:9px; border-radius:50%; background:#555b63; }
@@ -340,44 +414,71 @@ async fn control_page() -> Html<&'static str> {
   .meta { color:#8d95a0; font-size:13px; }
   main { flex:1; padding:18px; display:flex; flex-direction:column; justify-content:center; gap:12px; max-width:520px; width:100%; margin:0 auto; }
   .hint { color:#7d8793; font-size:13px; text-align:center; margin-bottom:6px; }
+  .status { min-height:20px; color:#8d95a0; font-size:12px; text-align:center; }
   .grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
-  button { min-height:74px; border:1px solid #2a3139; border-radius:16px; background:#11161c; color:#eef2f7; font-size:24px; font-weight:700; box-shadow:0 6px 20px rgba(0,0,0,.24); }
-  button:active { transform:translateY(1px); background:#1a212a; }
+  button { -webkit-appearance:none; appearance:none; min-height:74px; border:1px solid #2a3139; border-radius:16px; background:#11161c; color:#eef2f7; font-size:24px; font-weight:700; box-shadow:0 6px 20px rgba(0,0,0,.24); touch-action:manipulation; }
+  button:active { transform:scale(.98); background:#1a212a; }
   .label { display:block; font-size:11px; color:#8d95a0; margin-top:5px; font-weight:500; }
   .wide { grid-column:span 3; min-height:62px; font-size:18px; }
   .back { color:#9fb7ff; text-decoration:none; text-align:center; font-size:13px; margin-top:8px; }
+  .zone { border:1px dashed #2a3139; border-radius:18px; min-height:82px; display:flex; align-items:center; justify-content:center; color:#7d8793; font-size:13px; touch-action:none; }
 </style>
 </head>
 <body>
 <header><div class="row"><span id="dot" class="dot"></span><strong>NexQ Phone Controller</strong><span id="status" class="meta">connecting…</span></div></header>
 <main>
-  <div class="hint">Use this phone as a remote for the AI answer screen.</div>
+  <div class="hint">Remote control for the AI answer screen.</div>
+  <div id="commandStatus" class="status">Ready</div>
   <div class="grid">
-    <button onclick="send('top')">⇈<span class="label">TOP</span></button>
-    <button onclick="send('page_up')">▲<span class="label">PAGE UP</span></button>
-    <button onclick="send('up')">↑<span class="label">UP</span></button>
-    <button onclick="send('down')">↓<span class="label">DOWN</span></button>
-    <button onclick="send('page_down')">▼<span class="label">PAGE DOWN</span></button>
-    <button onclick="send('bottom')">⇊<span class="label">BOTTOM</span></button>
-    <button class="wide" onclick="send('page_down')">Scroll forward</button>
+    <button data-action="top">⇈<span class="label">TOP</span></button>
+    <button data-action="page_up">▲<span class="label">PAGE UP</span></button>
+    <button data-action="up">↑<span class="label">UP</span></button>
+    <button data-action="down">↓<span class="label">DOWN</span></button>
+    <button data-action="page_down">▼<span class="label">PAGE DOWN</span></button>
+    <button data-action="bottom">⇊<span class="label">BOTTOM</span></button>
+    <button class="wide" data-action="page_down">Scroll forward</button>
   </div>
+  <div id="swipeZone" class="zone">Swipe here to scroll · up / down</div>
   <a class="back" href="/">← Back to AI display</a>
 </main>
 <script>
 const dot=document.getElementById('dot');
 const status=document.getElementById('status');
+const commandStatus=document.getElementById('commandStatus');
+const zone=document.getElementById('swipeZone');
 let ws;
-function connect(){
+let wsReady=false;
+function wsConnect(){
   const proto=location.protocol==='https:'?'wss':'ws';
-  ws=new WebSocket(`${proto}://${location.host}/ws?v=3-control`);
-  ws.onopen=()=>{dot.classList.add('ok');status.textContent='connected';};
-  ws.onclose=()=>{dot.classList.remove('ok');status.textContent='reconnecting…';setTimeout(connect,1200);};
-  ws.onerror=()=>{dot.classList.remove('ok');status.textContent='connection error';};
+  try{ws=new WebSocket(`${proto}://${location.host}/ws?v=4-control`);}catch{return;}
+  ws.onopen=()=>{wsReady=true;dot.classList.add('ok');status.textContent='connected';};
+  ws.onclose=()=>{wsReady=false;dot.classList.remove('ok');status.textContent='reconnecting…';setTimeout(wsConnect,1200);};
+  ws.onerror=()=>{wsReady=false;};
 }
-function send(action){
-  if(ws && ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:'control',action}));
+async function send(action){
+  commandStatus.textContent='Sending…';
+  const payload=JSON.stringify({type:'control',action,source:'iphone'});
+  let sent=false;
+  try{
+    const res=await fetch('/control',{method:'POST',headers:{'Content-Type':'application/json'},cache:'no-store',body:payload});
+    sent=res.ok;
+  }catch{}
+  if(!sent && wsReady){
+    try{ws.send(payload);sent=true;}catch{}
+  }
+  commandStatus.textContent=sent?'✓ '+action.replaceAll('_',' '):'⚠ Not delivered';
+  if(navigator.vibrate) navigator.vibrate(10);
+  setTimeout(()=>{if(commandStatus.textContent.includes(action.replaceAll('_',' ')))commandStatus.textContent='Ready';},900);
 }
-connect();
+document.querySelectorAll('button[data-action]').forEach(button=>{
+  button.addEventListener('click',()=>send(button.dataset.action),{passive:true});
+  button.addEventListener('touchend',e=>{e.preventDefault();send(button.dataset.action);},{passive:false});
+});
+let startY=null,lastY=null;
+zone.addEventListener('touchstart',e=>{if(e.touches.length!==1)return;startY=e.touches[0].clientY;lastY=startY;},{passive:true});
+zone.addEventListener('touchmove',e=>{if(startY===null||e.touches.length!==1)return;const y=e.touches[0].clientY;const delta=y-lastY;if(Math.abs(delta)>=45){send(delta<0?'down':'up');lastY=y;}e.preventDefault();},{passive:false});
+zone.addEventListener('touchend',()=>{startY=null;lastY=null;},{passive:true});
+wsConnect();
 </script>
 </body>
 </html>"#)
