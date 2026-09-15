@@ -1,17 +1,20 @@
 import { useEffect } from "react";
-import { onTranscriptUpdate, onTranslationResult } from "../lib/events";
 import {
-  publishLanTranscript,
-  publishLanTranslation,
+  onStreamStart,
+  onStreamToken,
+  onStreamEnd,
+} from "../lib/events";
+import {
+  publishLanAiStart,
+  publishLanAiToken,
+  publishLanAiEnd,
   startLanRemote,
 } from "../lib/lanRemote";
 
 /**
- * Starts the LAN remote server from the launcher webview and mirrors the
- * existing transcript/translation event streams to connected second screens.
- *
- * The launcher remains the single publisher so the hidden overlay webview does
- * not duplicate every event.
+ * Starts the LAN second-screen server from the launcher and mirrors only the
+ * live AI response stream. Transcript and translation events stay on the main
+ * NexQ window.
  */
 export function useLanRemote() {
   useEffect(() => {
@@ -26,33 +29,41 @@ export function useLanRemote() {
       try {
         const info = await startLanRemote();
         if (mounted) {
-          console.info("[LAN Remote] Ready:", info.urls.join(", ") || `port ${info.port}`);
+          console.info(
+            "[LAN Remote] Ready:",
+            info.urls.join(", ") || `port ${info.port}`,
+          );
         }
       } catch (error) {
         console.warn("[LAN Remote] Server unavailable:", error);
         return;
       }
 
-      const transcriptUnlisten = await onTranscriptUpdate(({ segment }) => {
-        publishLanTranscript(segment).catch(() => {
-          // No connected remote is normal; do not disturb the interview UI.
-        });
+      const startUnlisten = await onStreamStart((event) => {
+        publishLanAiStart(event.mode).catch(() => {});
       });
 
-      const translationUnlisten = await onTranslationResult((result) => {
-        publishLanTranslation(result).catch(() => {});
+      const tokenUnlisten = await onStreamToken((event) => {
+        publishLanAiToken(event.token).catch(() => {});
+      });
+
+      const endUnlisten = await onStreamEnd(() => {
+        publishLanAiEnd().catch(() => {});
       });
 
       if (!mounted) {
-        transcriptUnlisten();
-        translationUnlisten();
+        startUnlisten();
+        tokenUnlisten();
+        endUnlisten();
         return;
       }
 
-      unlisteners.push(transcriptUnlisten, translationUnlisten);
+      unlisteners.push(startUnlisten, tokenUnlisten, endUnlisten);
     };
 
-    setup().catch((error) => console.warn("[LAN Remote] Setup failed:", error));
+    setup().catch((error) =>
+      console.warn("[LAN Remote] Setup failed:", error),
+    );
 
     return () => {
       mounted = false;
