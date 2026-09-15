@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { TranscriptSegment, TranslationResult } from "./types";
+import type { IntelligenceMode } from "./types";
 
 export interface LanRemoteInfo {
   running: boolean;
@@ -19,16 +19,23 @@ export async function getLanRemoteInfo(): Promise<LanRemoteInfo> {
   return invoke<LanRemoteInfo>("get_lan_remote_info");
 }
 
-export async function publishLanTranscript(segment: TranscriptSegment): Promise<void> {
+export async function publishLanAiStart(mode: IntelligenceMode): Promise<void> {
   await invoke("lan_publish", {
-    kind: "transcript",
-    payloadJson: JSON.stringify(segment),
+    kind: "ai_start",
+    payloadJson: JSON.stringify({ mode }),
   });
 }
 
-export async function publishLanTranslation(result: TranslationResult): Promise<void> {
+export async function publishLanAiToken(token: string): Promise<void> {
   await invoke("lan_publish", {
-    kind: "translation",
-    payloadJson: JSON.stringify(result),
+    kind: "ai_token",
+    payloadJson: JSON.stringify({ token }),
+  });
+}
+
+export async function publishLanAiEnd(): Promise<void> {
+  await invoke("lan_publish", {
+    kind: "ai_end",
+    payloadJson: JSON.stringify({}),
   });
 }
