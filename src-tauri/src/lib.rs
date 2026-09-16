@@ -10,6 +10,7 @@ pub mod state;
 pub mod stt;
 pub mod translation;
 pub mod tray;
+pub mod lan_remote;
 
 use state::AppState;
 use std::sync::{Arc, Mutex};
@@ -52,6 +53,7 @@ use commands::translation_model_commands;
 use commands::tray_commands;
 // == MODULE COMMANDS: updater ==
 use commands::updater_commands;
+use commands::lan_remote_commands;
 
 /// Enable live blur-behind on a window via the undocumented `SetWindowCompositionAttribute`
 /// (user32). `DwmEnableBlurBehindWindow` (used automatically by tao for `transparent: true`)
@@ -628,6 +630,11 @@ pub fn run() {
             translation_model_commands::cancel_opus_mt_download,
             translation_model_commands::delete_opus_mt_model,
             translation_model_commands::activate_opus_mt_model,
+            // == COMMANDS: LAN remote ==
+            lan_remote_commands::start_lan_remote,
+            lan_remote_commands::stop_lan_remote,
+            lan_remote_commands::get_lan_remote_info,
+            lan_remote_commands::lan_publish,
             // == COMMANDS: updater ==
             updater_commands::check_for_update,
             updater_commands::download_and_install_update,
